@@ -7,6 +7,7 @@
 #import <OCMock/OCMockRecorder.h>
 #import <OCMock/OCMArg.h>
 #import <OCMock/OCMConstraint.h>
+#import "OCClassMockObject.h"
 #import "OCMPassByRefSetter.h"
 #import "OCMReturnValueProvider.h"
 #import "OCMBoxedReturnValueProvider.h"
@@ -109,15 +110,41 @@
 }
 
 
+#pragma mark  Switching to class methods
+
+- (id)classMethod
+{
+    recordedAsClassMethod = YES;
+    [signatureResolver setupClassForClassMethodMocking];
+    return self;
+}
+
+
 #pragma mark  Recording the actual invocation
 
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
 {
-	return [signatureResolver methodSignatureForSelector:aSelector];
+    if(recordedAsClassMethod)
+        return [[signatureResolver mockedClass] methodSignatureForSelector:aSelector];
+    
+    NSMethodSignature *signature = [signatureResolver methodSignatureForSelector:aSelector];
+    if(signature == nil)
+    {
+        // if we're a working with a class mock and there is a class method, auto-switch
+        if(([[signatureResolver class] isSubclassOfClass:[OCClassMockObject class]]) &&
+           ([[signatureResolver mockedClass] respondsToSelector:aSelector]))
+        {
+            [self classMethod];
+            signature = [self methodSignatureForSelector:aSelector];
+        }
+    }
+    return signature;
 }
 
 - (void)forwardInvocation:(NSInvocation *)anInvocation
 {
+    if(recordedAsClassMethod)
+        [signatureResolver setupForwarderForClassMethodSelector:[anInvocation selector]];
 	if(recordedInvocation != nil)
 		[NSException raise:NSInternalInconsistencyException format:@"Recorder received two methods to record."];
 	[anInvocation setTarget:nil];
@@ -136,9 +163,15 @@
 
 - (BOOL)matchesInvocation:(NSInvocation *)anInvocation
 {
-	id  recordedArg, passedArg;
-	int i, n;
+	id      target, recordedArg, passedArg;
+	int     i, n;
+    BOOL    isClassMethodInvocation;
 	
+    target = [anInvocation target];
+    isClassMethodInvocation = (target != nil) && (target == [target class]);
+    if(isClassMethodInvocation != recordedAsClassMethod)
+        return NO;
+    
 	if([anInvocation selector] != [recordedInvocation selector])
 		return NO;
 	
